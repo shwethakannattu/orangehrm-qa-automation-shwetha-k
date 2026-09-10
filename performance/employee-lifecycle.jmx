@@ -2,7 +2,9 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="OrangeHRM Performance Tests" enabled="true">
-      <stringProp name="TestPlan.comments">Part 5: JMeter performance tests for the Login API and Employee Creation API (Senior QA Automation Engineer technical test). Built with JMeter per the recruiter's stated tooling options (JMeter or K6).</stringProp>
+      <stringProp name="TestPlan.comments">Part 5: JMeter performance tests for the Login API and Employee Creation API (Senior QA Automation Engineer technical test). Built with JMeter per the recruiter's stated tooling options (JMeter or K6).
+
+Login flow fixed against real evidence captured from the live demo's login form (see performance/README.md "Login flow" section): the actual form posts to /auth/validate (not /auth/login, which is GET-only and returns 405 for POST), and requires a per-session CSRF "_token" that only exists after a prior GET to /auth/login — the token is embedded server-side as a Vue prop (:token="&quot;...&quot;") on that GET response, not as a conventional hidden-input attribute, so it's extracted with a regex rather than a form-field extractor. Each thread group performs this GET+extract+POST sequence independently (rather than sharing a session across thread groups, which JMeter's per-thread Cookie Manager doesn't do by default) so every virtual user authenticates with its own session, same as a real user would.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
@@ -37,7 +39,7 @@
       </ConfigTestElement>
       <hashTree/>
 
-      <!-- Cookie manager: the Employee Creation thread group re-uses the session cookie the Login thread group obtains -->
+      <!-- Cookie manager: gives each thread its own session/cookie jar, matching a real independent user -->
       <CookieManager guiclass="CookiePanel" testclass="CookieManager" testname="HTTP Cookie Manager" enabled="true">
         <collectionProp name="CookieManager.cookies"/>
         <boolProp name="CookieManager.clearEachIteration">false</boolProp>
@@ -60,13 +62,42 @@
       </ThreadGroup>
       <hashTree>
 
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST /auth/login" enabled="true">
+        <!-- Step 1: load the login page to get a session cookie + this session's CSRF token -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="GET /auth/login" enabled="true">
           <stringProp name="HTTPSampler.path">/web/index.php/auth/login</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <!-- The token isn't a normal hidden-input value in the raw response — it's a Vue
+               component prop: <auth-login :token="&quot;<TOKEN>&quot;" ...>. Confirmed via a
+               real fetch() of the raw (pre-render) HTML against the live demo. -->
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor" testname="Extract CSRF Token" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">false</stringProp>
+            <stringProp name="RegexExtractor.refname">csrfToken</stringProp>
+            <stringProp name="RegexExtractor.regex">:token=&quot;&amp;quot;(.*?)&amp;quot;</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">TOKEN_NOT_FOUND</stringProp>
+            <stringProp name="RegexExtractor.match_number">1</stringProp>
+          </RegexExtractor>
+          <hashTree/>
+        </hashTree>
+
+        <!-- Step 2: the real login submit — confirmed via the live form's actual action="" -
+             it's /auth/validate, not /auth/login (POSTing to /auth/login is what returned the
+             405 Method Not Allowed we saw in the first run: that route is GET-only). -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST /auth/validate" enabled="true">
+          <stringProp name="HTTPSampler.path">/web/index.php/auth/validate</stringProp>
           <stringProp name="HTTPSampler.method">POST</stringProp>
           <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
           <boolProp name="HTTPSampler.postBodyRaw">false</boolProp>
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
             <collectionProp name="Arguments.arguments">
+              <elementProp name="_token" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">true</boolProp>
+                <stringProp name="Argument.value">${csrfToken}</stringProp>
+                <stringProp name="Argument.name">_token</stringProp>
+              </elementProp>
               <elementProp name="username" elementType="HTTPArgument">
                 <boolProp name="HTTPArgument.always_encode">true</boolProp>
                 <stringProp name="Argument.value">${ADMIN_USERNAME}</stringProp>
@@ -81,7 +112,11 @@
           </elementProp>
         </HTTPSamplerProxy>
         <hashTree>
-          <!-- Threshold: functional pass/fail on HTTP status -->
+          <!-- Threshold: functional pass/fail on HTTP status. With follow_redirects=true,
+               JMeter's sample reflects the final response in the redirect chain (the
+               dashboard page, HTTP 200) rather than the intermediate 302 — both are kept
+               here since either is a valid signal of a successful login depending on
+               redirect-following configuration. -->
           <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert: login succeeded (HTTP 200/302)" enabled="true">
             <collectionProp name="Asserion.test_strings">
               <stringProp name="49586">200</stringProp>
@@ -126,14 +161,52 @@
         </RandomVariableConfig>
         <hashTree/>
 
-        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Content-Type: application/json" enabled="true">
-          <collectionProp name="HeaderManager.headers">
-            <elementProp name="Content-Type" elementType="Header">
-              <stringProp name="Header.name">Content-Type</stringProp>
-              <stringProp name="Header.value">application/json</stringProp>
-            </elementProp>
-          </collectionProp>
-        </HeaderManager>
+        <!-- This thread group is its own independent virtual user, so it authenticates on
+             its own rather than relying on a session from the Login API thread group — a
+             separate Thread Group means separate threads with their own Cookie Manager jar,
+             so a session obtained elsewhere never carries over here regardless of run order. -->
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="GET /auth/login" enabled="true">
+          <stringProp name="HTTPSampler.path">/web/index.php/auth/login</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor" testname="Extract CSRF Token" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">false</stringProp>
+            <stringProp name="RegexExtractor.refname">csrfToken</stringProp>
+            <stringProp name="RegexExtractor.regex">:token=&quot;&amp;quot;(.*?)&amp;quot;</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">TOKEN_NOT_FOUND</stringProp>
+            <stringProp name="RegexExtractor.match_number">1</stringProp>
+          </RegexExtractor>
+          <hashTree/>
+        </hashTree>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST /auth/validate" enabled="true">
+          <stringProp name="HTTPSampler.path">/web/index.php/auth/validate</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.postBodyRaw">false</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="_token" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">true</boolProp>
+                <stringProp name="Argument.value">${csrfToken}</stringProp>
+                <stringProp name="Argument.name">_token</stringProp>
+              </elementProp>
+              <elementProp name="username" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">true</boolProp>
+                <stringProp name="Argument.value">${ADMIN_USERNAME}</stringProp>
+                <stringProp name="Argument.name">username</stringProp>
+              </elementProp>
+              <elementProp name="password" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">true</boolProp>
+                <stringProp name="Argument.value">${ADMIN_PASSWORD}</stringProp>
+                <stringProp name="Argument.name">password</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+        </HTTPSamplerProxy>
         <hashTree/>
 
         <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST /api/v2/pim/employees" enabled="true">
@@ -151,6 +224,19 @@
           </elementProp>
         </HTTPSamplerProxy>
         <hashTree>
+          <!-- Scoped to just this sampler (not the whole thread group) — the login steps
+               above need to POST as regular form data, not JSON, so this header must not
+               apply to them. -->
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Content-Type: application/json" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="Content-Type" elementType="Header">
+                <stringProp name="Header.name">Content-Type</stringProp>
+                <stringProp name="Header.value">application/json</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree/>
+
           <!-- Threshold: functional pass/fail on HTTP status -->
           <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Assert: employee created (HTTP 200)" enabled="true">
             <collectionProp name="Asserion.test_strings">

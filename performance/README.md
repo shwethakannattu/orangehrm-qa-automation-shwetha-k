@@ -9,6 +9,16 @@
 
 Load is intentionally light (5–10 threads, short ramp-up, single loop) — this is a shared public demo instance, and the goal is demonstrating the technique correctly, not stress-testing someone else's server.
 
+## Login flow
+
+The login form isn't a plain `POST /auth/login` — `/auth/login` is GET-only (a real run against it returned `405 Method Not Allowed`, confirmed via the raw `.jtl`). Each thread group instead runs:
+
+1. `GET /web/index.php/auth/login` — establishes the session cookie and returns the page HTML.
+2. A Regex Extractor pulls a per-session CSRF token out of that HTML. It isn't a conventional hidden `<input>` — it's a Vue component prop: `<auth-login :token="&quot;<TOKEN>&quot;" ...>` — confirmed by fetching the live demo's raw (pre-render) HTML directly. Regex: `:token="&quot;(.*?)&quot;`.
+3. `POST /web/index.php/auth/validate` — the form's real `action`, confirmed the same way — with `username`, `password`, and `_token` (the extracted value).
+
+Both the Login API and Employee Creation API thread groups run this sequence independently rather than sharing a session between them: separate JMeter thread groups mean separate threads, and each gets its own Cookie Manager jar that isn't shared with any other thread group regardless of run order — so each is its own fully independent virtual user, same as a real one.
+
 ## Setup
 
 1. Install a JDK (11+): https://adoptium.net/
