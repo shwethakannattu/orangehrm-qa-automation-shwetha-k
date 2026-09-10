@@ -58,7 +58,25 @@ export class LoginPage {
       `goto() -> domcontentloaded took ${afterDomContentLoaded - start}ms`
     );
 
-    await this.usernameInput.waitFor({ state: "visible", timeout: 60_000 });
+    // A real CI run (see README "Known instability") showed this hang can
+    // outlast a full 60s wait AND both of Playwright's own test-level
+    // retries in a row — i.e. it isn't a one-off blip within a single
+    // attempt, it's the demo app shell staying stuck for minutes at a
+    // time. A plain longer timeout just waits longer on a page that's
+    // already stuck; a reload forces a fresh render cycle, which is what
+    // actually resolves this failure mode when it happens locally. One
+    // bounded reload attempt here is cheap and doesn't hide a real bug —
+    // if the username field still never appears after a fresh load, this
+    // still fails loudly.
+    try {
+      await this.usernameInput.waitFor({ state: "visible", timeout: 45_000 });
+    } catch (err) {
+      logger.warn(
+        `username field did not appear within 45s of domcontentloaded — reloading once before giving up (see README "Known instability")`
+      );
+      await this.page.reload({ waitUntil: "domcontentloaded" });
+      await this.usernameInput.waitFor({ state: "visible", timeout: 45_000 });
+    }
     const afterUsernameVisible = Date.now();
     logger.step(
       `username field became visible ${afterUsernameVisible - afterDomContentLoaded}ms after domcontentloaded`
