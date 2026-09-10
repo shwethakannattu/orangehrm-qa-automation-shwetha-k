@@ -8,3 +8,4 @@ performance/results/*.jtl
 performance/results/html-report/
 npm-debug.log*
 *.log
+jmeter.log
