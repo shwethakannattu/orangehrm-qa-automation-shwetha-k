@@ -1,0 +1,32 @@
+{
+  "name": "orangehrm-qa-automation-shwetha-k",
+  "version": "1.0.0",
+  "description": "Playwright + TypeScript automation framework for the OrangeHRM employee lifecycle technical test (Senior QA Automation Engineer).",
+  "main": "index.js",
+  "author": "Shwetha K",
+  "license": "ISC",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:dev": "cross-env TEST_ENV=dev playwright test",
+    "test:staging": "cross-env TEST_ENV=staging playwright test",
+    "test:smoke": "playwright test --grep @smoke",
+    "test:regression": "playwright test --grep @regression",
+    "test:api": "playwright test --grep @api",
+    "report": "playwright show-report"
+  },
+  "keywords": [
+    "playwright",
+    "typescript",
+    "qa-automation",
+    "orangehrm"
+  ],
+  "devDependencies": {
+    "@faker-js/faker": "^10.6.0",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.20.2",
+    "cross-env": "^7.0.3",
+    "dotenv": "^17.4.2",
+    "typescript": "^7.0.2"
+  }
+}
