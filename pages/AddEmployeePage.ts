@@ -21,7 +21,17 @@ export class AddEmployeePage {
     this.firstNameInput = page.getByPlaceholder("First Name");
     this.lastNameInput = page.getByPlaceholder("Last Name");
     this.employeeIdInput = page.locator(".oxd-grid-item:has-text('Employee Id') input");
-    this.createLoginDetailsToggle = page.getByText("Create Login Details").locator("..").locator("button");
+    // This is a hidden native <input type="checkbox"> with a custom-styled
+    // <span class="oxd-switch-input"> drawn on top of it — real users click
+    // the visible span, and Playwright's actionability check correctly
+    // refuses to click the input underneath it (it's genuinely covered).
+    // Confirmed via the actual DOM captured in a real failure's error
+    // context: `<span ... class="oxd-switch-input ...">` intercepts
+    // pointer events on the checkbox. Target that span instead.
+    this.createLoginDetailsToggle = page
+      .getByText("Create Login Details", { exact: true })
+      .locator("..")
+      .locator(".oxd-switch-input");
     this.usernameInput = page.locator(".oxd-grid-item:has-text('Username') input");
     this.passwordInput = page.locator(".oxd-grid-item:has-text('Password') input").first();
     this.confirmPasswordInput = page.locator(".oxd-grid-item:has-text('Confirm Password') input");
@@ -29,7 +39,11 @@ export class AddEmployeePage {
   }
 
   async goto(baseUrl: string) {
-    await this.page.goto(`${baseUrl}/web/index.php/pim/addEmployee`);
+    // See LoginPage.goto — the demo app shell can be slow to boot.
+    await this.page.goto(`${baseUrl}/web/index.php/pim/addEmployee`, {
+      waitUntil: "domcontentloaded",
+    });
+    await this.firstNameInput.waitFor({ state: "visible", timeout: 60_000 });
   }
 
   async fillBasicDetails(firstName: string, lastName: string) {

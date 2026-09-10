@@ -17,6 +17,9 @@ import { logger } from "../../utils/logger";
  * the previous one. Kept as separate test() blocks rather than one giant
  * test so a failure at "update" doesn't hide whether "create" worked —
  * see README "Key Design Decisions".
+ *
+ * The two independent login tests live in authentication.spec.ts instead —
+ * see the comment there for why (a real CI sharding bug, not just tidiness).
  */
 test.describe.serial("Employee lifecycle @regression", () => {
   let employee: GeneratedEmployee;
@@ -24,20 +27,6 @@ test.describe.serial("Employee lifecycle @regression", () => {
 
   test.beforeAll(() => {
     employee = generateEmployee();
-  });
-
-  test("Authentication — Admin can log in with valid credentials @smoke", async ({ page }) => {
-    const loginPage = new LoginPage(page);
-    await loginPage.goto(config.baseUrl);
-    await loginPage.login(config.adminUsername, config.adminPassword);
-    await loginPage.expectLoginSucceeded();
-  });
-
-  test("Authentication — invalid credentials are rejected @smoke", async ({ page }) => {
-    const loginPage = new LoginPage(page);
-    await loginPage.goto(config.baseUrl);
-    await loginPage.login("Admin", "not-the-real-password");
-    await loginPage.expectInvalidCredentialsError();
   });
 
   test("Employee creation — Admin creates a new employee with ESS login @api", async ({ page }) => {
@@ -101,12 +90,26 @@ test.describe.serial("Employee lifecycle @regression", () => {
     await employeeListPage.openFirstResult();
 
     const personalDetailsPage = new PersonalDetailsPage(page);
+    await personalDetailsPage.waitForLoaded();
     const newLicenseNumber = `DL-${employeeId}`;
 
+    // Left unanchored — the demo doesn't publish its API shape, and a real
+    // run showed the actual save request can legitimately sit under a
+    // sub-path (anchoring to end-of-path/query previously excluded it
+    // entirely and caused a 15s timeout with nothing matching at all).
+    // Filtered to a mutation verb instead, which is what actually
+    // distinguishes the real save from the unrelated background GETs this
+    // page fires (e.g. the Attachments tab's own fetch) — that filter is
+    // what stops one of those GETs from winning the race and being
+    // captured in place of the real save. If the exact verb below is ever
+    // wrong again, apiCapture.ts now logs every URL-matching response it
+    // sees regardless of method, so the real one shows up directly in the
+    // run's own output instead of requiring another guess.
     const { status } = await captureApiCall(
       page,
       /\/api\/v2\/pim\/employees\/\d+/,
-      async () => personalDetailsPage.updateDrivingLicenseNumber(newLicenseNumber)
+      async () => personalDetailsPage.updateDrivingLicenseNumber(newLicenseNumber),
+      ["PUT", "POST", "PATCH"]
     );
 
     expect(status, "Employee update API should return 200").toBe(200);
@@ -127,16 +130,27 @@ test.describe.serial("Employee lifecycle @regression", () => {
     await employeeListPage.goto(config.baseUrl);
     await employeeListPage.searchByName(employee.fullName);
 
+    // Filtered to a mutation verb for the same reason as the update test
+    // above: the unanchored URL match alone can't tell this apart from an
+    // unrelated GET firing around the same time. Includes POST since some
+    // OrangeHRM list actions submit a bulk-delete as a POST with an ids
+    // array rather than a plain DELETE — unconfirmed against a real run
+    // yet, so left permissive rather than guessed narrowly; apiCapture.ts
+    // will log the real verb if this needs correcting.
     const { status } = await captureApiCall(
       page,
       /\/api\/v2\/pim\/employees/,
-      async () => employeeListPage.deleteFirstResult()
+      async () => employeeListPage.deleteFirstResult(),
+      ["DELETE", "POST"]
     );
 
     expect(status, "Employee delete API should return 200").toBe(200);
 
+    // searchByName() here would wait forever for an autocomplete suggestion
+    // that can never appear now that this employee is gone — see
+    // EmployeeListPage.searchByNameTextOnly().
     await employeeListPage.goto(config.baseUrl);
-    await employeeListPage.searchByName(employee.fullName);
+    await employeeListPage.searchByNameTextOnly(employee.fullName);
     await employeeListPage.expectNoRecordsFound();
   });
 });
