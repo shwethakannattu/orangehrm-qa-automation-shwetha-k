@@ -92,11 +92,12 @@ jobs:
       - name: Download blob reports
         uses: actions/download-artifact@v4
         with:
-          path: all-reports
+          path: all-blob-reports
           pattern: blob-report-shard-*
+          merge-multiple: true
 
       - name: Merge into a single HTML report
-        run: npx playwright merge-reports --reporter html ./all-reports/*/
+        run: npx playwright merge-reports --reporter html ./all-blob-reports
 
       - name: Upload merged HTML report
         uses: actions/upload-artifact@v4
